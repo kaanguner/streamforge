@@ -30,18 +30,18 @@ import (
 	"os"
 	"time"
 
-	"github.com/go-redis/redis/v8"      // Redis client
-	"github.com/gorilla/mux"            // HTTP router (like Express.js or Flask)
+	"github.com/go-redis/redis/v8" // Redis client
+	"github.com/gorilla/mux"       // HTTP router (like Express.js or Flask)
 )
 
 // =============================================================================
 // CONFIGURATION
 // =============================================================================
-// 
+//
 // 🎓 LEARNING NOTE:
 // In Go, we use structs to define data structures. This is similar to
 // Python's dataclasses or TypeScript interfaces.
-// 
+//
 // The `json:"field_name"` tags tell Go how to serialize/deserialize JSON.
 // =============================================================================
 
@@ -94,34 +94,34 @@ type FraudAlert struct {
 
 // SessionStats represents aggregated session data
 type SessionStats struct {
-	SessionID   string    `json:"session_id"`
-	UserID      string    `json:"user_id"`
-	StartTime   time.Time `json:"start_time"`
-	EndTime     time.Time `json:"end_time"`
-	PageViews   int       `json:"page_views"`
-	ProductViews int      `json:"product_views"`
-	AddToCarts  int       `json:"add_to_carts"`
-	Purchases   int       `json:"purchases"`
-	Revenue     float64   `json:"revenue"`
+	SessionID    string    `json:"session_id"`
+	UserID       string    `json:"user_id"`
+	StartTime    time.Time `json:"start_time"`
+	EndTime      time.Time `json:"end_time"`
+	PageViews    int       `json:"page_views"`
+	ProductViews int       `json:"product_views"`
+	AddToCarts   int       `json:"add_to_carts"`
+	Purchases    int       `json:"purchases"`
+	Revenue      float64   `json:"revenue"`
 }
 
 // RevenueMetrics represents real-time revenue data
 type RevenueMetrics struct {
-	WindowStart  time.Time `json:"window_start"`
-	WindowEnd    time.Time `json:"window_end"`
-	TotalGMV     float64   `json:"total_gmv"`
-	OrderCount   int       `json:"order_count"`
-	AvgOrderValue float64  `json:"avg_order_value"`
-	TopCategory  string    `json:"top_category"`
+	WindowStart   time.Time `json:"window_start"`
+	WindowEnd     time.Time `json:"window_end"`
+	TotalGMV      float64   `json:"total_gmv"`
+	OrderCount    int       `json:"order_count"`
+	AvgOrderValue float64   `json:"avg_order_value"`
+	TopCategory   string    `json:"top_category"`
 }
 
 // HealthResponse for the health check endpoint
 type HealthResponse struct {
-	Status      string `json:"status"`
-	Service     string `json:"service"`
-	Version     string `json:"version"`
-	RedisOK     bool   `json:"redis_ok"`
-	Timestamp   string `json:"timestamp"`
+	Status    string `json:"status"`
+	Service   string `json:"service"`
+	Version   string `json:"version"`
+	RedisOK   bool   `json:"redis_ok"`
+	Timestamp string `json:"timestamp"`
 }
 
 // APIResponse wraps all API responses
@@ -179,7 +179,7 @@ func NewApp(config Config) *App {
 func (app *App) setupRoutes() {
 	// 🎓 Method syntax: (app *App) means this function belongs to App
 	// It's like Python's 'self' but explicitly declared
-	
+
 	// API versioning via path prefix
 	api := app.router.PathPrefix("/api/v1").Subrouter()
 
@@ -211,10 +211,10 @@ func (app *App) setupRoutes() {
 func loggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
-		
+
 		// Call the next handler
 		next.ServeHTTP(w, r)
-		
+
 		// Log after request completes
 		log.Printf(
 			"[%s] %s %s - %v",
@@ -281,7 +281,7 @@ func (app *App) handleInfo(w http.ResponseWriter, r *http.Request) {
 // handleFraudAlerts returns recent fraud alerts
 func (app *App) handleFraudAlerts(w http.ResponseWriter, r *http.Request) {
 	ctx := context.Background()
-	
+
 	// 🎓 Try to get from Redis first
 	// In production, Flink writes alerts to Redis for fast access
 	alerts, err := app.getFraudAlertsFromRedis(ctx, "", 100)
@@ -300,7 +300,7 @@ func (app *App) handleFraudAlerts(w http.ResponseWriter, r *http.Request) {
 
 // handleFraudAlertsByUser returns alerts for a specific user
 func (app *App) handleFraudAlertsByUser(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)  // 🎓 Extract path parameters
+	vars := mux.Vars(r) // 🎓 Extract path parameters
 	userID := vars["user_id"]
 
 	ctx := context.Background()
@@ -320,7 +320,7 @@ func (app *App) handleFraudAlertsByUser(w http.ResponseWriter, r *http.Request) 
 // handleSessions returns aggregated session data
 func (app *App) handleSessions(w http.ResponseWriter, r *http.Request) {
 	sessions := app.getSampleSessions()
-	
+
 	response := APIResponse[[]SessionStats]{
 		Success: true,
 		Data:    sessions,
@@ -335,7 +335,7 @@ func (app *App) handleSessionsByUser(w http.ResponseWriter, r *http.Request) {
 	userID := vars["user_id"]
 
 	sessions := filterSessionsByUser(app.getSampleSessions(), userID)
-	
+
 	response := APIResponse[[]SessionStats]{
 		Success: true,
 		Data:    sessions,
@@ -348,15 +348,15 @@ func (app *App) handleSessionsByUser(w http.ResponseWriter, r *http.Request) {
 func (app *App) handleRevenue(w http.ResponseWriter, r *http.Request) {
 	summary := map[string]interface{}{
 		"today": map[string]interface{}{
-			"gmv":           1250000.00,
-			"order_count":   3450,
-			"avg_order":     362.32,
-			"top_category":  "Elektronik",
+			"gmv":          1250000.00,
+			"order_count":  3450,
+			"avg_order":    362.32,
+			"top_category": "Elektronik",
 		},
 		"week": map[string]interface{}{
-			"gmv":           8750000.00,
-			"order_count":   24150,
-			"avg_order":     362.32,
+			"gmv":         8750000.00,
+			"order_count": 24150,
+			"avg_order":   362.32,
 		},
 	}
 	writeJSON(w, http.StatusOK, APIResponse[map[string]interface{}]{
@@ -402,7 +402,7 @@ func (app *App) handleRealtimeRevenue(w http.ResponseWriter, r *http.Request) {
 func (app *App) getFraudAlertsFromRedis(ctx context.Context, userID string, limit int64) ([]FraudAlert, error) {
 	// 🎓 In production, Flink writes alerts to a Redis sorted set
 	// Key pattern: "fraud:alerts" or "fraud:user:{user_id}"
-	
+
 	key := "fraud:alerts"
 	if userID != "" {
 		key = fmt.Sprintf("fraud:user:%s", userID)
@@ -536,7 +536,7 @@ func main() {
 
 	// Start server
 	addr := fmt.Sprintf(":%s", config.Port)
-	
+
 	fmt.Println("╔══════════════════════════════════════════════════════════════╗")
 	fmt.Println("║           StreamForge Analytics API (Go)                      ║")
 	fmt.Println("╠══════════════════════════════════════════════════════════════╣")
