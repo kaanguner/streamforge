@@ -1,0 +1,188 @@
+# TrendStream Flink Kubernetes Deployment
+# Deploys Apache Flink to GKE Autopilot
+
+---
+# Namespace for Flink
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: flink
+  labels:
+    app: trendstream
+
+---
+# ConfigMap for Flink configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: flink-config
+  namespace: flink
+data:
+  flink-conf.yaml: |
+    jobmanager.rpc.address: flink-jobmanager
+    jobmanager.rpc.port: 6123
+    jobmanager.memory.process.size: 1600m
+    taskmanager.memory.process.size: 2048m
+    taskmanager.numberOfTaskSlots: 4
+    parallelism.default: 2
+    state.backend: rocksdb
+    state.checkpoints.dir: gs://trendstream-data-2026/checkpoints
+    state.savepoints.dir: gs://trendstream-data-2026/savepoints
+    execution.checkpointing.interval: 60000
+    web.upload.dir: /opt/flink/uploads
+  log4j-console.properties: |
+    rootLogger.level = INFO
+    rootLogger.appenderRef.console.ref = ConsoleAppender
+    appender.console.name = ConsoleAppender
+    appender.console.type = CONSOLE
+    appender.console.layout.type = PatternLayout
+    appender.console.layout.pattern = %d{yyyy-MM-dd HH:mm:ss,SSS} %-5p %-60c %x - %m%n
+
+---
+# Flink JobManager Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flink-jobmanager
+  namespace: flink
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: flink
+      component: jobmanager
+  template:
+    metadata:
+      labels:
+        app: flink
+        component: jobmanager
+    spec:
+      serviceAccountName: flink-sa
+      containers:
+        - name: jobmanager
+          image: flink:1.18-scala_2.12-java11
+          args: ["jobmanager"]
+          ports:
+            - containerPort: 6123
+              name: rpc
+            - containerPort: 8081
+              name: webui
+          env:
+            - name: GOOGLE_APPLICATION_CREDENTIALS
+              value: /var/secrets/google/key.json
+          volumeMounts:
+            - name: flink-config-volume
+              mountPath: /opt/flink/conf/flink-conf.yaml
+              subPath: flink-conf.yaml
+            - name: flink-config-volume
+              mountPath: /opt/flink/conf/log4j-console.properties
+              subPath: log4j-console.properties
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "2Gi"
+            limits:
+              cpu: "2"
+              memory: "4Gi"
+      volumes:
+        - name: flink-config-volume
+          configMap:
+            name: flink-config
+
+---
+# Flink TaskManager Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flink-taskmanager
+  namespace: flink
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: flink
+      component: taskmanager
+  template:
+    metadata:
+      labels:
+        app: flink
+        component: taskmanager
+    spec:
+      serviceAccountName: flink-sa
+      containers:
+        - name: taskmanager
+          image: flink:1.18-scala_2.12-java11
+          args: ["taskmanager"]
+          ports:
+            - containerPort: 6122
+              name: rpc
+          volumeMounts:
+            - name: flink-config-volume
+              mountPath: /opt/flink/conf/flink-conf.yaml
+              subPath: flink-conf.yaml
+            - name: flink-config-volume
+              mountPath: /opt/flink/conf/log4j-console.properties
+              subPath: log4j-console.properties
+          resources:
+            requests:
+              cpu: "1"
+              memory: "2Gi"
+            limits:
+              cpu: "2"
+              memory: "4Gi"
+      volumes:
+        - name: flink-config-volume
+          configMap:
+            name: flink-config
+
+---
+# JobManager Service (internal RPC)
+apiVersion: v1
+kind: Service
+metadata:
+  name: flink-jobmanager
+  namespace: flink
+spec:
+  type: ClusterIP
+  ports:
+    - name: rpc
+      port: 6123
+      targetPort: 6123
+    - name: blob
+      port: 6124
+      targetPort: 6124
+    - name: webui
+      port: 8081
+      targetPort: 8081
+  selector:
+    app: flink
+    component: jobmanager
+
+---
+# JobManager Service (LoadBalancer for external access)
+apiVersion: v1
+kind: Service
+metadata:
+  name: flink-jobmanager-external
+  namespace: flink
+  annotations:
+    cloud.google.com/load-balancer-type: "External"
+spec:
+  type: LoadBalancer
+  ports:
+    - name: webui
+      port: 80
+      targetPort: 8081
+  selector:
+    app: flink
+    component: jobmanager
+
+---
+# Service Account for Flink (with Workload Identity)
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: flink-sa
+  namespace: flink
+  annotations:
+    iam.gke.io/gcp-service-account: trendstream-flink@trendstream-portfolio-2026.iam.gserviceaccount.com

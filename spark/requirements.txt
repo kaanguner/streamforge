@@ -1,0 +1,18 @@
+# TrendStream PySpark Requirements
+
+# Core Spark
+pyspark==3.5.0
+
+# Cloud connectors
+google-cloud-bigquery==3.14.0
+google-cloud-storage==2.14.0
+
+# Iceberg (for local testing)
+# Note: For GCP Dataproc, Iceberg is pre-installed
+
+# Data quality
+great-expectations==0.18.0
+
+# Utilities
+pandas==2.1.0
+pyarrow==14.0.0

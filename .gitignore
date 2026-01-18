@@ -1,0 +1,60 @@
+# Logs and local files
+*.log
+logs/
+*.tmp
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+venv/
+ENV/
+.env
+*.egg-info/
+
+# Java/Maven
+target/
+*.class
+*.jar
+!flink-jobs/target/*.jar
+
+# IDE
+.idea/
+*.iml
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+
+# Kubernetes
+kubeconfig
+*.kubeconfig
+
+# Secrets
+*secret*
+*credential*
+*.pem
+*.key
+service-account*.json
+
+# Docker
+.docker/
+
+# Local development
+.env.local
+.env.*.local
+
+# Test outputs
+out/
+output/
