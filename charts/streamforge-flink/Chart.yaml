@@ -1,0 +1,16 @@
+apiVersion: v2
+name: streamforge-flink
+description: StreamForge Flink cluster Helm chart for Kubernetes
+type: application
+version: 1.0.0
+appVersion: "1.18"
+
+keywords:
+  - flink
+  - streaming
+  - analytics
+  - kafka
+
+maintainers:
+  - name: Kaan Guner
+    email: kaan@example.com

@@ -1,0 +1,115 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-jobmanager
+  labels:
+    app: {{ .Release.Name }}
+    component: jobmanager
+spec:
+  replicas: {{ .Values.jobmanager.replicas }}
+  selector:
+    matchLabels:
+      app: {{ .Release.Name }}
+      component: jobmanager
+  template:
+    metadata:
+      labels:
+        app: {{ .Release.Name }}
+        component: jobmanager
+      {{- if .Values.podAnnotations }}
+      annotations:
+        {{- toYaml .Values.podAnnotations | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ .Values.serviceAccount.name }}
+      containers:
+        - name: jobmanager
+          image: "{{ .Values.flink.image.repository }}:{{ .Values.flink.image.tag }}"
+          imagePullPolicy: {{ .Values.flink.image.pullPolicy }}
+          args: ["jobmanager"]
+          ports:
+            - name: rpc
+              containerPort: 6123
+            - name: ui
+              containerPort: 8081
+            - name: blob
+              containerPort: 6124
+            {{- if .Values.metrics.enabled }}
+            - name: metrics
+              containerPort: {{ .Values.metrics.port }}
+            {{- end }}
+          env:
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: {{ .Values.kafka.bootstrapServers | quote }}
+            - name: GCP_PROJECT_ID
+              value: {{ .Values.bigquery.projectId | quote }}
+          resources:
+            {{- toYaml .Values.jobmanager.resources | nindent 12 }}
+          volumeMounts:
+            - name: flink-config
+              mountPath: /opt/flink/conf/flink-conf.yaml
+              subPath: flink-conf.yaml
+            - name: flink-config
+              mountPath: /opt/flink/conf/log4j-console.properties
+              subPath: log4j-console.properties
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 8081
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 8081
+            initialDelaySeconds: 20
+            periodSeconds: 5
+      volumes:
+        - name: flink-config
+          configMap:
+            name: {{ .Release.Name }}-flink-config
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-jobmanager
+  labels:
+    app: {{ .Release.Name }}
+    component: jobmanager
+spec:
+  type: ClusterIP
+  ports:
+    - name: rpc
+      port: 6123
+    - name: blob
+      port: 6124
+    - name: ui
+      port: 8081
+  selector:
+    app: {{ .Release.Name }}
+    component: jobmanager
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-jobmanager-external
+  labels:
+    app: {{ .Release.Name }}
+    component: jobmanager
+spec:
+  type: {{ .Values.jobmanager.service.type }}
+  ports:
+    - name: ui
+      port: {{ .Values.jobmanager.service.port }}
+      targetPort: 8081
+  selector:
+    app: {{ .Release.Name }}
+    component: jobmanager

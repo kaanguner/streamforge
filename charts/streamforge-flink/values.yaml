@@ -1,0 +1,91 @@
+# StreamForge Flink Helm Values
+# Override these values for different environments (dev, staging, prod)
+
+# Environment name
+environment: development
+
+# Flink configuration
+flink:
+  version: "1.18"
+  image:
+    repository: flink
+    tag: "1.18-scala_2.12-java11"
+    pullPolicy: IfNotPresent
+
+# JobManager configuration
+jobmanager:
+  replicas: 1
+  resources:
+    requests:
+      memory: "1024Mi"
+      cpu: "500m"
+    limits:
+      memory: "2048Mi"
+      cpu: "1000m"
+  service:
+    type: LoadBalancer
+    port: 8081
+
+# TaskManager configuration
+taskmanager:
+  replicas: 2
+  resources:
+    requests:
+      memory: "2048Mi"
+      cpu: "1000m"
+    limits:
+      memory: "4096Mi"
+      cpu: "2000m"
+  # Number of task slots per TaskManager
+  taskSlots: 2
+
+# Checkpointing configuration
+checkpointing:
+  enabled: true
+  interval: 60000  # 60 seconds
+  stateBackend: rocksdb
+  # GCS bucket for checkpoints (override per environment)
+  storagePath: "gs://trendstream-data-2026/checkpoints"
+
+# Savepoints
+savepoints:
+  storagePath: "gs://trendstream-data-2026/savepoints"
+
+# Kafka configuration
+kafka:
+  bootstrapServers: "kafka:9092"
+  topics:
+    input: "transactions.orders"
+    output: "alerts.fraud"
+    dlq: "dlq.fraud-detector"
+
+# BigQuery sink
+bigquery:
+  projectId: "trendstream-portfolio-2026"
+  dataset: "trendstream_analytics"
+
+# GCP Service Account for Workload Identity
+serviceAccount:
+  create: true
+  name: "streamforge-flink"
+  annotations:
+    iam.gke.io/gcp-service-account: "trendstream-flink@trendstream-portfolio-2026.iam.gserviceaccount.com"
+
+# Prometheus monitoring
+metrics:
+  enabled: true
+  port: 9249
+
+# Pod annotations
+podAnnotations:
+  prometheus.io/scrape: "true"
+  prometheus.io/port: "9249"
+
+# Node selector (optional)
+nodeSelector: {}
+
+# Tolerations (optional)
+tolerations: []
+
+# Affinity rules (optional)
+affinity: {}

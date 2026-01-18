@@ -13,9 +13,16 @@
 // 4. Static typing catches errors at compile time
 // 5. Single binary deployment (no dependency hell)
 //
+// OBSERVABILITY:
+// This API implements the RED method for metrics:
+// - Rate: Requests per second
+// - Errors: Error rate
+// - Duration: Request latency
+//
 // HOW TO RUN:
 //   go run main.go
-//   curl http://localhost:8090/api/health
+//   curl http://localhost:8090/api/v1/health
+//   curl http://localhost:8090/metrics  # Prometheus metrics
 //
 // =============================================================================
 
@@ -30,30 +37,80 @@ import (
 	"os"
 	"time"
 
-	"github.com/go-redis/redis/v8" // Redis client
-	"github.com/gorilla/mux"       // HTTP router (like Express.js or Flask)
+	"github.com/go-redis/redis/v8"
+	"github.com/gorilla/mux"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+)
+
+// =============================================================================
+// PROMETHEUS METRICS (RED Method)
+// =============================================================================
+//
+// 🎓 LEARNING NOTE:
+// The RED method is a standard for microservice observability:
+// - Rate: How many requests per second?
+// - Errors: How many of those requests are failing?
+// - Duration: How long do requests take?
+//
+// These metrics are scraped by Prometheus and visualized in Grafana.
+// =============================================================================
+
+var (
+	// 🎓 Counter: Only goes up (total requests)
+	httpRequestsTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "streamforge_http_requests_total",
+			Help: "Total number of HTTP requests",
+		},
+		[]string{"method", "endpoint", "status"},
+	)
+
+	// 🎓 Histogram: Distribution of values (latency buckets)
+	httpRequestDuration = promauto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "streamforge_http_request_duration_seconds",
+			Help:    "HTTP request latency in seconds",
+			Buckets: prometheus.DefBuckets, // Default: .005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10
+		},
+		[]string{"method", "endpoint"},
+	)
+
+	// 🎓 Gauge: Can go up or down (current connections)
+	httpRequestsInFlight = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "streamforge_http_requests_in_flight",
+			Help: "Current number of HTTP requests being processed",
+		},
+	)
+
+	// Business metrics
+	fraudAlertsServed = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "streamforge_fraud_alerts_served_total",
+			Help: "Total number of fraud alerts served via API",
+		},
+	)
+
+	redisErrors = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "streamforge_redis_errors_total",
+			Help: "Total number of Redis connection errors",
+		},
+	)
 )
 
 // =============================================================================
 // CONFIGURATION
 // =============================================================================
-//
-// 🎓 LEARNING NOTE:
-// In Go, we use structs to define data structures. This is similar to
-// Python's dataclasses or TypeScript interfaces.
-//
-// The `json:"field_name"` tags tell Go how to serialize/deserialize JSON.
-// =============================================================================
 
-// Config holds all application configuration
 type Config struct {
 	Port        string
 	RedisAddr   string
 	Environment string
 }
 
-// LoadConfig reads configuration from environment variables
-// 🎓 Go idiom: functions that start with capital letters are "exported" (public)
 func LoadConfig() Config {
 	return Config{
 		Port:        getEnv("API_PORT", "8090"),
@@ -62,8 +119,6 @@ func LoadConfig() Config {
 	}
 }
 
-// getEnv returns environment variable or default value
-// 🎓 Go idiom: lowercase function = private to this package
 func getEnv(key, defaultValue string) string {
 	if value := os.Getenv(key); value != "" {
 		return value
@@ -74,13 +129,7 @@ func getEnv(key, defaultValue string) string {
 // =============================================================================
 // DATA MODELS
 // =============================================================================
-//
-// 🎓 LEARNING NOTE:
-// These structs match the data produced by our Flink jobs.
-// The JSON tags define how they serialize to/from JSON.
-// =============================================================================
 
-// FraudAlert represents a fraud detection alert from Flink
 type FraudAlert struct {
 	AlertID     string    `json:"alert_id"`
 	UserID      string    `json:"user_id"`
@@ -92,7 +141,6 @@ type FraudAlert struct {
 	Description string    `json:"description"`
 }
 
-// SessionStats represents aggregated session data
 type SessionStats struct {
 	SessionID    string    `json:"session_id"`
 	UserID       string    `json:"user_id"`
@@ -105,7 +153,6 @@ type SessionStats struct {
 	Revenue      float64   `json:"revenue"`
 }
 
-// RevenueMetrics represents real-time revenue data
 type RevenueMetrics struct {
 	WindowStart   time.Time `json:"window_start"`
 	WindowEnd     time.Time `json:"window_end"`
@@ -115,7 +162,6 @@ type RevenueMetrics struct {
 	TopCategory   string    `json:"top_category"`
 }
 
-// HealthResponse for the health check endpoint
 type HealthResponse struct {
 	Status    string `json:"status"`
 	Service   string `json:"service"`
@@ -124,8 +170,6 @@ type HealthResponse struct {
 	Timestamp string `json:"timestamp"`
 }
 
-// APIResponse wraps all API responses
-// 🎓 Go generics (Go 1.18+): T can be any type
 type APIResponse[T any] struct {
 	Success bool   `json:"success"`
 	Data    T      `json:"data,omitempty"`
@@ -134,30 +178,20 @@ type APIResponse[T any] struct {
 }
 
 // =============================================================================
-// APPLICATION STRUCT
-// =============================================================================
-//
-// 🎓 LEARNING NOTE:
-// In Go, we don't have classes, but we use structs with methods.
-// This is similar to Python's class with self, but more explicit.
+// APPLICATION
 // =============================================================================
 
-// App holds the application state and dependencies
 type App struct {
 	config Config
 	redis  *redis.Client
 	router *mux.Router
 }
 
-// NewApp creates a new application instance
-// 🎓 Go idiom: "constructor" functions are named New<Type>
 func NewApp(config Config) *App {
-	// Create Redis client
-	// 🎓 The redis.Options struct uses named fields (similar to Python kwargs)
 	rdb := redis.NewClient(&redis.Options{
 		Addr:     config.RedisAddr,
-		Password: "", // No password for local dev
-		DB:       0,  // Default DB
+		Password: "",
+		DB:       0,
 	})
 
 	app := &App{
@@ -166,7 +200,6 @@ func NewApp(config Config) *App {
 		router: mux.NewRouter(),
 	}
 
-	// Register routes
 	app.setupRoutes()
 
 	return app
@@ -177,17 +210,14 @@ func NewApp(config Config) *App {
 // =============================================================================
 
 func (app *App) setupRoutes() {
-	// 🎓 Method syntax: (app *App) means this function belongs to App
-	// It's like Python's 'self' but explicitly declared
+	// 🎓 Prometheus metrics endpoint - scraped by Prometheus server
+	app.router.Handle("/metrics", promhttp.Handler())
 
-	// API versioning via path prefix
+	// API routes with versioning
 	api := app.router.PathPrefix("/api/v1").Subrouter()
 
-	// Health & info endpoints
 	api.HandleFunc("/health", app.handleHealth).Methods("GET")
 	api.HandleFunc("/info", app.handleInfo).Methods("GET")
-
-	// Analytics endpoints (the "Serving Layer")
 	api.HandleFunc("/fraud-alerts", app.handleFraudAlerts).Methods("GET")
 	api.HandleFunc("/fraud-alerts/{user_id}", app.handleFraudAlertsByUser).Methods("GET")
 	api.HandleFunc("/sessions", app.handleSessions).Methods("GET")
@@ -195,52 +225,86 @@ func (app *App) setupRoutes() {
 	api.HandleFunc("/revenue", app.handleRevenue).Methods("GET")
 	api.HandleFunc("/revenue/realtime", app.handleRealtimeRevenue).Methods("GET")
 
-	// Middleware for logging
+	// 🎓 Apply Prometheus middleware to all routes
+	app.router.Use(prometheusMiddleware)
 	app.router.Use(loggingMiddleware)
 }
 
 // =============================================================================
-// MIDDLEWARE
+// PROMETHEUS MIDDLEWARE
 // =============================================================================
 //
 // 🎓 LEARNING NOTE:
-// Middleware in Go wraps handlers to add cross-cutting concerns.
-// This pattern is used in almost every Go web framework.
+// This middleware wraps every request to:
+// 1. Track in-flight requests (gauge)
+// 2. Measure request duration (histogram)
+// 3. Count total requests (counter)
+//
+// The metrics are exposed at /metrics in Prometheus format.
 // =============================================================================
+
+// responseWriter wraps http.ResponseWriter to capture status code
+type responseWriter struct {
+	http.ResponseWriter
+	statusCode int
+}
+
+func (rw *responseWriter) WriteHeader(code int) {
+	rw.statusCode = code
+	rw.ResponseWriter.WriteHeader(code)
+}
+
+func prometheusMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Skip metrics endpoint to avoid recursion
+		if r.URL.Path == "/metrics" {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		// Track in-flight requests
+		httpRequestsInFlight.Inc()
+		defer httpRequestsInFlight.Dec()
+
+		// Start timer
+		start := time.Now()
+
+		// Wrap response writer to capture status
+		wrapped := &responseWriter{ResponseWriter: w, statusCode: http.StatusOK}
+
+		// Call the next handler
+		next.ServeHTTP(wrapped, r)
+
+		// Record metrics
+		duration := time.Since(start).Seconds()
+		endpoint := r.URL.Path
+		method := r.Method
+		status := fmt.Sprintf("%d", wrapped.statusCode)
+
+		httpRequestDuration.WithLabelValues(method, endpoint).Observe(duration)
+		httpRequestsTotal.WithLabelValues(method, endpoint, status).Inc()
+	})
+}
 
 func loggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
-
-		// Call the next handler
 		next.ServeHTTP(w, r)
-
-		// Log after request completes
-		log.Printf(
-			"[%s] %s %s - %v",
-			r.Method,
-			r.RequestURI,
-			r.RemoteAddr,
-			time.Since(start),
-		)
+		log.Printf("[%s] %s %s - %v", r.Method, r.RequestURI, r.RemoteAddr, time.Since(start))
 	})
 }
 
 // =============================================================================
-// HANDLER FUNCTIONS
-// =============================================================================
-//
-// 🎓 LEARNING NOTE:
-// Handlers in Go take (w http.ResponseWriter, r *http.Request)
-// - w: Used to write the response (like Python's return jsonify(...))
-// - r: Contains the request data (headers, body, params)
+// HANDLERS
 // =============================================================================
 
-// handleHealth returns API health status
 func (app *App) handleHealth(w http.ResponseWriter, r *http.Request) {
-	// Check Redis connectivity
 	ctx := context.Background()
 	redisOK := app.redis.Ping(ctx).Err() == nil
+
+	if !redisOK {
+		redisErrors.Inc()
+	}
 
 	response := HealthResponse{
 		Status:    "healthy",
@@ -257,7 +321,6 @@ func (app *App) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, response)
 }
 
-// handleInfo returns API information
 func (app *App) handleInfo(w http.ResponseWriter, r *http.Request) {
 	info := map[string]interface{}{
 		"service":     "StreamForge Analytics API",
@@ -268,27 +331,27 @@ func (app *App) handleInfo(w http.ResponseWriter, r *http.Request) {
 			"/api/v1/fraud-alerts",
 			"/api/v1/sessions",
 			"/api/v1/revenue",
+			"/metrics",
 		},
-		"data_sources": map[string]string{
-			"fraud_alerts": "Redis (from Flink FraudDetector)",
-			"sessions":     "Redis (from Flink SessionAggregator)",
-			"revenue":      "Redis (from Flink RevenueCalculator)",
+		"observability": map[string]string{
+			"metrics": "/metrics (Prometheus format)",
+			"method":  "RED (Rate, Errors, Duration)",
 		},
 	}
 	writeJSON(w, http.StatusOK, info)
 }
 
-// handleFraudAlerts returns recent fraud alerts
 func (app *App) handleFraudAlerts(w http.ResponseWriter, r *http.Request) {
 	ctx := context.Background()
 
-	// 🎓 Try to get from Redis first
-	// In production, Flink writes alerts to Redis for fast access
 	alerts, err := app.getFraudAlertsFromRedis(ctx, "", 100)
 	if err != nil {
-		// Fallback to sample data for demo
+		redisErrors.Inc()
 		alerts = app.getSampleFraudAlerts()
 	}
+
+	// 🎓 Track business metric
+	fraudAlertsServed.Add(float64(len(alerts)))
 
 	response := APIResponse[[]FraudAlert]{
 		Success: true,
@@ -298,16 +361,18 @@ func (app *App) handleFraudAlerts(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, response)
 }
 
-// handleFraudAlertsByUser returns alerts for a specific user
 func (app *App) handleFraudAlertsByUser(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r) // 🎓 Extract path parameters
+	vars := mux.Vars(r)
 	userID := vars["user_id"]
 
 	ctx := context.Background()
 	alerts, err := app.getFraudAlertsFromRedis(ctx, userID, 50)
 	if err != nil {
+		redisErrors.Inc()
 		alerts = filterAlertsByUser(app.getSampleFraudAlerts(), userID)
 	}
+
+	fraudAlertsServed.Add(float64(len(alerts)))
 
 	response := APIResponse[[]FraudAlert]{
 		Success: true,
@@ -317,7 +382,6 @@ func (app *App) handleFraudAlertsByUser(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, response)
 }
 
-// handleSessions returns aggregated session data
 func (app *App) handleSessions(w http.ResponseWriter, r *http.Request) {
 	sessions := app.getSampleSessions()
 
@@ -329,7 +393,6 @@ func (app *App) handleSessions(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, response)
 }
 
-// handleSessionsByUser returns sessions for a specific user
 func (app *App) handleSessionsByUser(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	userID := vars["user_id"]
@@ -344,7 +407,6 @@ func (app *App) handleSessionsByUser(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, response)
 }
 
-// handleRevenue returns revenue metrics summary
 func (app *App) handleRevenue(w http.ResponseWriter, r *http.Request) {
 	summary := map[string]interface{}{
 		"today": map[string]interface{}{
@@ -365,9 +427,7 @@ func (app *App) handleRevenue(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleRealtimeRevenue returns streaming revenue metrics
 func (app *App) handleRealtimeRevenue(w http.ResponseWriter, r *http.Request) {
-	// 🎓 This would read from Redis where Flink writes every minute
 	metrics := []RevenueMetrics{
 		{
 			WindowStart:   time.Now().Add(-1 * time.Minute),
@@ -396,19 +456,15 @@ func (app *App) handleRealtimeRevenue(w http.ResponseWriter, r *http.Request) {
 }
 
 // =============================================================================
-// REDIS DATA ACCESS
+// REDIS ACCESS
 // =============================================================================
 
 func (app *App) getFraudAlertsFromRedis(ctx context.Context, userID string, limit int64) ([]FraudAlert, error) {
-	// 🎓 In production, Flink writes alerts to a Redis sorted set
-	// Key pattern: "fraud:alerts" or "fraud:user:{user_id}"
-
 	key := "fraud:alerts"
 	if userID != "" {
 		key = fmt.Sprintf("fraud:user:%s", userID)
 	}
 
-	// Get latest alerts from sorted set
 	result, err := app.redis.ZRevRange(ctx, key, 0, limit-1).Result()
 	if err != nil {
 		return nil, err
@@ -426,7 +482,7 @@ func (app *App) getFraudAlertsFromRedis(ctx context.Context, userID string, limi
 }
 
 // =============================================================================
-// SAMPLE DATA (for demo when Redis is empty)
+// SAMPLE DATA
 // =============================================================================
 
 func (app *App) getSampleFraudAlerts() []FraudAlert {
@@ -492,11 +548,9 @@ func (app *App) getSampleSessions() []SessionStats {
 }
 
 // =============================================================================
-// HELPER FUNCTIONS
+// HELPERS
 // =============================================================================
 
-// writeJSON sends a JSON response
-// 🎓 This is a common pattern in Go - extract repetitive code into helpers
 func writeJSON(w http.ResponseWriter, status int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -524,34 +578,29 @@ func filterSessionsByUser(sessions []SessionStats, userID string) []SessionStats
 }
 
 // =============================================================================
-// MAIN ENTRY POINT
+// MAIN
 // =============================================================================
 
 func main() {
-	// Load configuration
 	config := LoadConfig()
-
-	// Create application
 	app := NewApp(config)
 
-	// Start server
 	addr := fmt.Sprintf(":%s", config.Port)
 
 	fmt.Println("╔══════════════════════════════════════════════════════════════╗")
-	fmt.Println("║           StreamForge Analytics API (Go)                      ║")
+	fmt.Println("║       StreamForge Analytics API (Go + Prometheus)            ║")
 	fmt.Println("╠══════════════════════════════════════════════════════════════╣")
 	fmt.Printf("║  Server:      http://localhost%s                         ║\n", addr)
+	fmt.Printf("║  Metrics:     http://localhost%s/metrics                 ║\n", addr)
 	fmt.Printf("║  Environment: %-45s ║\n", config.Environment)
-	fmt.Printf("║  Redis:       %-45s ║\n", config.RedisAddr)
 	fmt.Println("╠══════════════════════════════════════════════════════════════╣")
 	fmt.Println("║  Endpoints:                                                   ║")
 	fmt.Println("║    GET /api/v1/health         - Health check                  ║")
 	fmt.Println("║    GET /api/v1/fraud-alerts   - Recent fraud alerts           ║")
 	fmt.Println("║    GET /api/v1/sessions       - Session analytics             ║")
 	fmt.Println("║    GET /api/v1/revenue        - Revenue metrics               ║")
+	fmt.Println("║    GET /metrics               - Prometheus metrics            ║")
 	fmt.Println("╚══════════════════════════════════════════════════════════════╝")
 
-	// 🎓 ListenAndServe blocks and runs the server
-	// In production, you'd add graceful shutdown handling
 	log.Fatal(http.ListenAndServe(addr, app.router))
 }

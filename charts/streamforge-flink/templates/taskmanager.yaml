@@ -1,0 +1,74 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-taskmanager
+  labels:
+    app: {{ .Release.Name }}
+    component: taskmanager
+spec:
+  replicas: {{ .Values.taskmanager.replicas }}
+  selector:
+    matchLabels:
+      app: {{ .Release.Name }}
+      component: taskmanager
+  template:
+    metadata:
+      labels:
+        app: {{ .Release.Name }}
+        component: taskmanager
+      {{- if .Values.podAnnotations }}
+      annotations:
+        {{- toYaml .Values.podAnnotations | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ .Values.serviceAccount.name }}
+      containers:
+        - name: taskmanager
+          image: "{{ .Values.flink.image.repository }}:{{ .Values.flink.image.tag }}"
+          imagePullPolicy: {{ .Values.flink.image.pullPolicy }}
+          args: ["taskmanager"]
+          ports:
+            - name: data
+              containerPort: 6121
+            - name: rpc
+              containerPort: 6122
+            {{- if .Values.metrics.enabled }}
+            - name: metrics
+              containerPort: {{ .Values.metrics.port }}
+            {{- end }}
+          env:
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: {{ .Values.kafka.bootstrapServers | quote }}
+            - name: GCP_PROJECT_ID
+              value: {{ .Values.bigquery.projectId | quote }}
+          resources:
+            {{- toYaml .Values.taskmanager.resources | nindent 12 }}
+          volumeMounts:
+            - name: flink-config
+              mountPath: /opt/flink/conf/flink-conf.yaml
+              subPath: flink-conf.yaml
+            - name: flink-config
+              mountPath: /opt/flink/conf/log4j-console.properties
+              subPath: log4j-console.properties
+          livenessProbe:
+            tcpSocket:
+              port: 6122
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            tcpSocket:
+              port: 6122
+            initialDelaySeconds: 20
+            periodSeconds: 5
+      volumes:
+        - name: flink-config
+          configMap:
+            name: {{ .Release.Name }}-flink-config
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
